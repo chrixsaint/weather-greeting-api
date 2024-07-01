@@ -1,67 +1,77 @@
+// Importing packages
+import dotenv from 'dotenv';
 import "dotenv/config";
-import fetch from 'node-fetch';
 import express from 'express';
-import requestIp from 'request-ip';
-
+import axios from 'axios';
 const app = express();
-app.use(requestIp.mw());
 
-async function getLocation(ip) {
-    const url = `https://ipapi.co/${ip}/json/`;
-    try {
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`Error: ${response.statusText}`);
-        }
-        const data = await response.json();
-        return data.city; // Only the city is needed for this task
-    } catch (error) {
-        console.error('Failed to fetch location:', error);
-        return null;
-    }
-}
+// Getting geolocation related data
+const getGeodata = async (ip) => {
+  try {
+    const response = await axios.get(`https://ipapi.co/${ip}/json`);
+    console.log(response);
+    return response.data;
+  } catch (error) {
+    console.error("Error fetching geo data:", error);
+    return {
+      city: "unknown location",
+      latitude: null,
+      longitude: null
+    };
+  }
+};
 
-async function getTemperature(city) {
-    const apiKey = process.env.OPENWEATHERMAP_API_KEY
-    const url = `http://api.openweathermap.org/data/2.5/weather?q=${city}&appid=${apiKey}&units=metric`;
+// Getting current temperature data
+const getCurrentTemperature = async (lat, lon) => {
+  try {
+    const response = await axios.get(
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`
+    );
+    return response.data;
+  } catch (error) {
+    console.log("Error fetching temperature:", error);
+    return { current_weather: { temperature: "unknown" } };
+  }
+};
 
-    try {
-        const response = await fetch(url);
-        const data = await response.json();
-        if (data && data.main && data.main.temp) {
-            return data.main.temp; // Returns the temperature in Celsius
-        } else {
-            throw new Error('Temperature data not found');
-        }
-    } catch (error) {
-        console.error(`Failed to fetch temperature for city ${city}: ${error}`);
-        return null; // Return null or appropriate value in case of failure
-    }
-}
-app.get('/api/hello', async (req, res) => {
-    const visitorName = req.query.visitor_name || 'Guest';
-    const clientIp = req.clientIp; // Retrieve the requester's IP address
-    console.log(`Client IP: ${clientIp}`); // Log the IP address
+app.get("/api/hello", async function (req, res) {
+  let ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  if (ip.includes(",")) {
+    ip = ip.split(",")[0].trim();
+  }
 
-    // Temporarily use a known public IP for testing
-    // const clientIp = '8.8.8.8'; // Uncomment for testing with a public IP
+  if (ip.includes("::ffff:")) {
+    ip = ip.split("::ffff:")[1];
+  }
 
-    const city = await getLocation(clientIp);
-    console.log(`City: ${city}`); // Log the fetched city
+  const visitorName = req.query.visitor_name || "Guest";
+  const geoData = await getGeodata(ip);
+  const location = geoData.city || "unknown location";
 
-    const temperature = await getTemperature(city);
-    console.log(`Temperature: ${temperature}`); // Log the temperature
+  let temperature = "unknown";
+  if (geoData.latitude && geoData.longitude) {
+    const tempData = await getCurrentTemperature(
+      geoData.latitude,
+      geoData.longitude
+    );
+    temperature = tempData.current_weather?.temperature ?? "unknown";
+  }
 
-    if (city && temperature !== null) {
-        res.json({
-            client_ip: clientIp,
-            location: city,
-            greeting: `Hello, ${visitorName}!, the temperature is ${temperature} degrees Celsius in ${city}`
-        });
-    } else {
-        res.status(500).send('Could not determine location or temperature');
-    }
+  const greeting = `Hello, ${visitorName}!, the temperature is ${temperature} degrees Celcius in ${location}.`;
+  res.json({
+    client_ip: ip,
+    location: location,
+    greeting: greeting
+  });
 });
 
-const PORT = 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+//Handles wrong routes
+app.all("*", (req, res) => {
+  res.status(404).send(`Can't find ${req.originalUrl} on the server`);
+});
+
+// Server listening
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`App is listening on port ${PORT}`);
+});
